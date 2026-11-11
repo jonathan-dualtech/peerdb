@@ -145,6 +145,9 @@ func processCDCFlowConfigUpdate(
 	if flowConfigUpdate.IdleTimeout > 0 {
 		state.SyncFlowOptions.IdleTimeoutSeconds = flowConfigUpdate.IdleTimeout
 	}
+	if dest := flowConfigUpdate.GetDestinationName(); dest != "" {
+		cfg.DestinationName = dest
+	}
 	cfg.Env = applyEnvUpdate(cfg.Env, flowConfigUpdate.UpdatedEnv, flowConfigUpdate.RemovedEnv)
 	applyQueryCDCConfigUpdate(cfg, flowConfigUpdate.QueryCdc)
 	if flowConfigUpdate.SnapshotNumRowsPerPartition > 0 {
@@ -726,7 +729,20 @@ func processTableRemovals(
 					return
 				}
 				logger.Info("tables removed from catalog")
-				done = true
+
+				dropDestinationFuture := workflow.ExecuteActivity(
+					removeTablesCtx,
+					flowable.DropRemovedDestinationTables,
+					cfg, exclusivelyRemovedTables)
+				removeTablesSelector.AddFuture(dropDestinationFuture, func(f workflow.Future) {
+					if err := f.Get(ctx, nil); err != nil {
+						logger.Error("failed to drop removed destination tables", slog.Any("error", err))
+						removeTablesFlowErr = err
+						return
+					}
+					logger.Info("dropped removed destination tables")
+					done = true
+				})
 			})
 		})
 	})

@@ -26,6 +26,7 @@ import (
 
 	"github.com/PeerDB-io/peerdb/flow/alerting"
 	"github.com/PeerDB-io/peerdb/flow/connectors"
+	connclickhouse "github.com/PeerDB-io/peerdb/flow/connectors/clickhouse"
 	connmetadata "github.com/PeerDB-io/peerdb/flow/connectors/external_metadata"
 	connpostgres "github.com/PeerDB-io/peerdb/flow/connectors/postgres"
 	"github.com/PeerDB-io/peerdb/flow/connectors/utils"
@@ -1028,9 +1029,63 @@ func (a *FlowableActivity) DropFlowDestination(ctx context.Context, req *protos.
 		)
 	}
 
+	if ch, ok := dstConn.(*connclickhouse.ClickHouseConnector); ok {
+		if err := a.dropClickHouseReplicaDatabase(ctx, req, ch); err != nil {
+			return a.Alerter.LogFlowError(ctx, req.FlowJobName,
+				exceptions.NewDropFlowError(fmt.Errorf("[DropFlowDestination] failed to drop database: %w", err)),
+			)
+		}
+	}
+
 	a.Alerter.LogFlowInfo(ctx, req.FlowJobName,
 		"Cleaned up destination peer replication objects. Any metadata storage has been dropped.")
 
+	return nil
+}
+
+// dropClickHouseReplicaDatabase drops the destination database when this mirror is the only one using it.
+// A resync keeps the database so the recreated mirror can load into it again.
+func (a *FlowableActivity) dropClickHouseReplicaDatabase(
+	ctx context.Context,
+	req *protos.DropFlowActivityInput,
+	ch *connclickhouse.ClickHouseConnector,
+) error {
+	cfg, err := internal.FetchConfigFromDB(ctx, a.CatalogPool, req.FlowJobName)
+	if err != nil {
+		return err
+	}
+	if cfg.Resync {
+		return nil
+	}
+
+	rows, err := a.CatalogPool.Query(ctx, `SELECT name FROM flows WHERE name <> $1`, req.FlowJobName)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		other, err := internal.FetchConfigFromDB(ctx, a.CatalogPool, name)
+		if err != nil {
+			return err
+		}
+		if other.GetDestinationName() == req.PeerName {
+			a.Alerter.LogFlowInfo(ctx, req.FlowJobName,
+				"kept ClickHouse database; another mirror still uses "+req.PeerName)
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	if err := ch.DropDatabase(ctx); err != nil {
+		return err
+	}
+	a.Alerter.LogFlowInfo(ctx, req.FlowJobName, "dropped ClickHouse database "+ch.Config.GetDatabase())
 	return nil
 }
 
@@ -2148,6 +2203,46 @@ func (a *FlowableActivity) RemoveTablesFromCatalog(
 		return a.Alerter.LogFlowError(ctx, cfg.FlowJobName, err)
 	}
 
+	return nil
+}
+
+// DropRemovedDestinationTables drops ClickHouse tables that were just removed from a mirror.
+// Other destinations are left as they are; removing a mapping there does not delete the table.
+func (a *FlowableActivity) DropRemovedDestinationTables(
+	ctx context.Context,
+	cfg *protos.FlowConnectionConfigsCore,
+	tablesToRemove []*protos.TableMapping,
+) error {
+	if len(tablesToRemove) == 0 {
+		return nil
+	}
+	ctx = context.WithValue(ctx, shared.FlowNameKey, cfg.FlowJobName)
+	destinationType, err := connectors.LoadPeerType(ctx, a.CatalogPool, cfg.DestinationName)
+	if err != nil {
+		return a.Alerter.LogFlowError(ctx, cfg.FlowJobName, fmt.Errorf("failed to load destination peer type: %w", err))
+	}
+	if destinationType != protos.DBType_CLICKHOUSE {
+		return nil
+	}
+
+	dstConn, dstClose, err := connectors.GetByNameAs[*connclickhouse.ClickHouseConnector](
+		ctx, cfg.Env, a.CatalogPool, cfg.DestinationName)
+	if err != nil {
+		return a.Alerter.LogFlowError(ctx, cfg.FlowJobName, fmt.Errorf("failed to connect to destination: %w", err))
+	}
+	defer dstClose(ctx)
+
+	dropped := 0
+	for _, tm := range tablesToRemove {
+		if tm.DestinationTableIdentifier == "" {
+			continue
+		}
+		if err := dstConn.DropTableForResync(ctx, tm.DestinationTableIdentifier); err != nil {
+			return a.Alerter.LogFlowError(ctx, cfg.FlowJobName, err)
+		}
+		dropped++
+	}
+	a.Alerter.LogFlowInfo(ctx, cfg.FlowJobName, fmt.Sprintf("dropped %d removed destination table(s)", dropped))
 	return nil
 }
 

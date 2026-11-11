@@ -12,13 +12,19 @@ import {
   FlowStateChangeRequest,
   MirrorStatusResponse,
 } from '@/grpc_generated/route';
+import { useSelectTheme } from '@/app/styles/select';
 import { useTheme } from '@/lib/AppTheme';
 import { Button } from '@/lib/Button';
 import { ProgressCircle } from '@/lib/ProgressCircle';
 import { TextField } from '@/lib/TextField';
 import { useRouter } from 'next/navigation';
-import React, { useMemo, useState, useTransition } from 'react';
+import React, { useEffect, useMemo, useState, useTransition } from 'react';
+import CreatableSelect from 'react-select/creatable';
 import TablePicker from '../../create/cdc/tablemapping';
+import {
+  fetchClickHouseDatabases,
+  useClickHouseDatabase,
+} from '../../create/destinationDatabase';
 import { changesToTablesMapping } from '../../create/handlers';
 import { blankCDCSetting } from '../../create/helpers/common';
 import { tableMappingSchema } from '../../create/schema';
@@ -76,6 +82,16 @@ export function parseEnvString(
     env[key] = value;
   }
   return { env };
+}
+
+function splitVirtualPeer(
+  name: string
+): { base: string; database: string } | null {
+  const splitAt = name.indexOf('__');
+  if (splitAt <= 0) return null;
+  const database = name.slice(splitAt + 2);
+  if (!/^[a-z_][a-z0-9_]{0,62}$/.test(database)) return null;
+  return { base: name.slice(0, splitAt), database };
 }
 
 function configFromState(res: MirrorStatusResponse): CDCFlowConfigUpdate {
@@ -171,6 +187,23 @@ export default function EditMirror({
       return;
     }
     startSubmit(async () => {
+      let destinationName: string | undefined;
+      if (
+        destinationIsClickHouse &&
+        destinationDatabase &&
+        destinationDatabase !== currentDatabase
+      ) {
+        try {
+          destinationName = await useClickHouseDatabase(
+            destinationBase,
+            destinationDatabase,
+            !destinationDatabases.includes(destinationDatabase)
+          );
+        } catch (err) {
+          notifyErr((err as Error).message);
+          return;
+        }
+      }
       const req: FlowStateChangeRequest = {
         flowJobName: mirrorId,
         requestedFlowState: FlowStatus.STATUS_RUNNING,
@@ -181,6 +214,7 @@ export default function EditMirror({
             removedTables,
             updatedEnv: envResult.env,
             removedEnv,
+            destinationName,
           },
         },
         dropMirrorStats: false,
@@ -203,6 +237,33 @@ export default function EditMirror({
   const isNotPaused =
     mirrorState.currentFlowState.toString() !==
     FlowStatus[FlowStatus.STATUS_PAUSED];
+  const selectTheme = useSelectTheme();
+  const destinationPeer = mirrorState.cdcStatus?.config?.destinationName ?? '';
+  const destinationIsClickHouse =
+    String(mirrorState.cdcStatus?.destinationType) === 'CLICKHOUSE';
+  const virtualDestination = splitVirtualPeer(destinationPeer);
+  const destinationBase = virtualDestination?.base || destinationPeer;
+  const currentDatabase = virtualDestination?.database ?? '';
+  const [destinationDatabase, setDestinationDatabase] = useState(currentDatabase);
+  const [destinationDatabases, setDestinationDatabases] = useState<string[]>([]);
+  const [databasesError, setDatabasesError] = useState('');
+
+  useEffect(() => {
+    if (!destinationIsClickHouse || !destinationBase) return;
+    let cancelled = false;
+    fetchClickHouseDatabases(destinationBase)
+      .then(({ databases, currentDatabase: peerDatabase }) => {
+        if (cancelled) return;
+        setDestinationDatabases(databases);
+        setDestinationDatabase((selected) => selected || peerDatabase);
+      })
+      .catch((err: Error) => {
+        if (!cancelled) setDatabasesError(err.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [destinationBase, destinationIsClickHouse]);
 
   const settingLabel: React.CSSProperties = {
     display: 'flex',
@@ -316,6 +377,36 @@ export default function EditMirror({
           />
         </label>
       </div>
+      {destinationIsClickHouse && (
+        <label style={{ ...settingLabel, marginTop: 12, maxWidth: 360 }}>
+          Destination database
+          <CreatableSelect
+            inputId='destination-database'
+            aria-label='Destination database'
+            theme={selectTheme}
+            isDisabled={isNotPaused || !!databasesError}
+            placeholder='Select or type a database'
+            value={
+              destinationDatabase
+                ? { value: destinationDatabase, label: destinationDatabase }
+                : null
+            }
+            options={destinationDatabases.map((database) => ({
+              value: database,
+              label: database,
+            }))}
+            formatCreateLabel={(input) => `Create database "${input}"`}
+            isValidNewOption={(input) =>
+              /^[a-z_][a-z0-9_]*$/.test(input) &&
+              !destinationDatabases.includes(input)
+            }
+            onChange={(option) => setDestinationDatabase(option?.value ?? '')}
+          />
+          <span style={{ fontWeight: 400, fontSize: 12 }}>
+            Saved with Edit Mirror. Tables stay where they are.
+          </span>
+        </label>
+      )}
 
       {!isNotPaused && additionalTables.length > 0 && (
         <div style={tablesSelectedCalloutStyle(theme.theme)}>

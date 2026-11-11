@@ -483,6 +483,11 @@ func (h *FlowRequestHandler) FlowStateChange(
 		for _, tm := range tablesToNormalize {
 			structured.NormalizeStructuredIngestionTypes(tm.StructuredIngestionConfig, tm.Columns)
 		}
+		if dest := cdcUpdate.GetDestinationName(); dest != "" {
+			if _, err := connectors.LoadPeerType(ctx, h.pool, dest); err != nil {
+				return nil, NewInvalidArgumentApiError(fmt.Errorf("destination peer %s: %w", dest, err))
+			}
+		}
 		if len(cdcUpdate.ResyncTables) > 0 {
 			if currState != protos.FlowStatus_STATUS_PAUSED {
 				return nil, NewInvalidArgumentApiError(fmt.Errorf("table-level resync requires the mirror to be paused"))
