@@ -653,6 +653,9 @@ message CDCFlowConfigUpdate {
   // the desired table settings. Each table is written to a temporary resync
   // table and atomically swapped into place.
   repeated TableMapping resync_tables = 14;
+  // When set, the mirror writes to this peer. For ClickHouse this is the
+  // virtual peer `<peer>__<database>`. Empty leaves the destination unchanged.
+  string destination_name = 15;
 }
 
 message QRepFlowConfigUpdate {

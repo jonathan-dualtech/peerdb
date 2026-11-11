@@ -8,19 +8,37 @@ import { LayoutMain } from '@/lib/Layout';
 import { Panel } from '@/lib/Panel';
 import { ProgressCircle } from '@/lib/ProgressCircle';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 import useSWR from 'swr';
 import { fetcher } from '../utils/swr';
 import { CDCFlows, QRepFlows } from './tables';
 
 export default function Mirrors() {
+  const [deleting, setDeleting] = useState<string[]>([]);
   const {
     data: flows,
     error,
     isLoading,
   }: { data: ListMirrorsResponse; error: any; isLoading: boolean } = useSWR(
     '/api/v1/mirrors/list',
-    fetcher
+    fetcher,
+    { refreshInterval: deleting.length > 0 ? 1000 : 0 }
   );
+
+  useEffect(() => {
+    if (!flows?.mirrors) return;
+    const names = new Set(flows.mirrors.map((mirror) => mirror.name));
+    setDeleting((current) => current.filter((name) => names.has(name)));
+  }, [flows]);
+
+  const markDeleting = (flowJobName: string) => {
+    setDeleting((current) =>
+      current.includes(flowJobName) ? current : [...current, flowJobName]
+    );
+  };
+  const unmarkDeleting = (flowJobName: string) => {
+    setDeleting((current) => current.filter((name) => name !== flowJobName));
+  };
 
   const cdcFlows = flows?.mirrors?.filter((flow) => flow.isCdc);
   const qrepFlows = flows?.mirrors?.filter((flow) => !flow.isCdc);
@@ -71,12 +89,23 @@ export default function Mirrors() {
       )}
       {!isLoading && (
         <Panel>
-          <CDCFlows cdcFlows={cdcFlows} />
+          <CDCFlows
+            cdcFlows={cdcFlows}
+            deleting={deleting}
+            onDeleting={markDeleting}
+            onDeleteFailed={unmarkDeleting}
+          />
         </Panel>
       )}
       {!isLoading && (
         <Panel style={{ marginTop: '2.5rem' }}>
-          <QRepFlows title='Query Replication' qrepFlows={qrepFlows} />
+          <QRepFlows
+            title='Query Replication'
+            qrepFlows={qrepFlows}
+            deleting={deleting}
+            onDeleting={markDeleting}
+            onDeleteFailed={unmarkDeleting}
+          />
         </Panel>
       )}
     </LayoutMain>

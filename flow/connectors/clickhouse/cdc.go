@@ -454,6 +454,21 @@ func (c *ClickHouseConnector) SyncFlowCleanup(ctx context.Context, jobName strin
 	return nil
 }
 
+// DropDatabase removes the peer database. Replica databases only hold mirrored tables.
+func (c *ClickHouseConnector) DropDatabase(ctx context.Context) error {
+	database := c.Config.Database
+	if database == "" || database == "default" || slices.Contains(systemDatabases, database) {
+		return nil
+	}
+	stmt := "DROP DATABASE IF EXISTS " + peerdb_clickhouse.QuoteIdentifier(database) + c.onCluster() +
+		chinternal.NewCHSettingsString(c.chVersion, chinternal.SettingMaxTableSizeToDrop, "0")
+	if err := c.execWithLogging(ctx, stmt); err != nil {
+		return fmt.Errorf("failed to drop database %s: %w", database, err)
+	}
+	c.logger.Info("dropped clickhouse database", slog.String("database", database))
+	return nil
+}
+
 func (c *ClickHouseConnector) RemoveTableEntriesFromRawTable(
 	ctx context.Context,
 	req *protos.RemoveTablesFromRawTableInput,

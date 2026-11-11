@@ -30,32 +30,39 @@ interface deleteScriptArgs {
 async function handleDropMirror(
   dropArgs: dropMirrorArgs,
   setMsg: Dispatch<SetStateAction<string>>,
-  dropStats: boolean
+  dropStats: boolean,
+  onDeleting?: (flowJobName: string) => void,
+  onDeleteFailed?: (flowJobName: string) => void
 ) {
+  onDeleting?.(dropArgs.flowJobName);
   const res = await changeFlowState(
     dropArgs.flowJobName,
     FlowStatus.STATUS_TERMINATING,
     dropStats
   );
   if (res.status !== 200) {
+    onDeleteFailed?.(dropArgs.flowJobName);
     setMsg(`Unable to start dropping mirror ${dropArgs.flowJobName}.`);
-    return;
+    return false;
   }
-
-  setMsg('Request to drop mirror sent successfully.');
-  window.location.reload();
+  return true;
 }
 
 export default function DropDialog({
   mode,
   dropArgs,
+  onDeleting,
+  onDeleteFailed,
 }: {
   mode: 'PEER' | 'MIRROR' | 'ALERT' | 'SCRIPT';
   dropArgs: dropMirrorArgs | dropPeerArgs | deleteAlertArgs | deleteScriptArgs;
+  onDeleting?: (flowJobName: string) => void;
+  onDeleteFailed?: (flowJobName: string) => void;
 }) {
   const [loading, startTransition] = useTransition();
   const [msg, setMsg] = useState('');
   const [dropStats, setDropStats] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const handleDropPeer = (dropArgs: dropPeerArgs) => {
     if (!dropArgs.peerName) {
@@ -124,9 +131,16 @@ export default function DropDialog({
   const handleDelete = () => {
     switch (mode) {
       case 'MIRROR':
-        startTransition(() =>
-          handleDropMirror(dropArgs as dropMirrorArgs, setMsg, dropStats)
-        );
+        startTransition(async () => {
+          const ok = await handleDropMirror(
+            dropArgs as dropMirrorArgs,
+            setMsg,
+            dropStats,
+            onDeleting,
+            onDeleteFailed
+          );
+          if (ok) setOpen(false);
+        });
         return;
       case 'PEER':
         return handleDropPeer(dropArgs as dropPeerArgs);
@@ -141,6 +155,7 @@ export default function DropDialog({
     <Dialog
       noInteract={true}
       size='large'
+      {...(mode === 'MIRROR' ? { open, onOpenChange: setOpen } : {})}
       triggerButton={
         <Button variant='drop'>
           {mode === 'ALERT' ? (

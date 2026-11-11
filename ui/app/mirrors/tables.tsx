@@ -10,12 +10,45 @@ import { Badge } from '@/lib/Badge';
 import { BadgeVariant } from '@/lib/Badge/Badge.styles';
 import { Icon } from '@/lib/Icon';
 import { Label } from '@/lib/Label';
+import { ProgressCircle } from '@/lib/ProgressCircle';
 import { Table, TableCell, TableRow } from '@/lib/Table';
 import Link from 'next/link';
 import { useTheme as useStyledTheme } from 'styled-components';
 import { MirrorType } from '../dto/MirrorsDTO';
 import { tableStyle } from '../peers/[peerName]/style';
 import { FormatStatus } from '../utils/flowstatus';
+
+function isDeletingStatus(status: FlowStatus) {
+  return String(status) === 'STATUS_TERMINATING';
+}
+
+function MirrorStatusBadge({
+  status,
+  deleting,
+}: {
+  status: FlowStatus;
+  deleting: boolean;
+}) {
+  if (deleting || isDeletingStatus(status)) {
+    return (
+      <Badge variant='destructive'>
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+          }}
+        >
+          <ProgressCircle variant='determinate_progress_circle' />
+          Deleting
+        </span>
+      </Badge>
+    );
+  }
+  return (
+    <Badge variant={getStatusVariant(status)}>{FormatStatus(status)}</Badge>
+  );
+}
 
 function getStatusVariant(status: FlowStatus): BadgeVariant {
   const statusStr = status.toString();
@@ -34,7 +67,17 @@ function getStatusVariant(status: FlowStatus): BadgeVariant {
   }
 }
 
-export function CDCFlows({ cdcFlows }: { cdcFlows: ListMirrorsItem[] }) {
+export function CDCFlows({
+  cdcFlows,
+  deleting,
+  onDeleting,
+  onDeleteFailed,
+}: {
+  cdcFlows: ListMirrorsItem[];
+  deleting: string[];
+  onDeleting: (flowJobName: string) => void;
+  onDeleteFailed: (flowJobName: string) => void;
+}) {
   const styledTheme = useStyledTheme();
   if (cdcFlows?.length === 0) {
     return (
@@ -86,9 +129,10 @@ export function CDCFlows({ cdcFlows }: { cdcFlows: ListMirrorsItem[] }) {
                 <MirrorLink flowName={flow.name} />
               </TableCell>
               <TableCell>
-                <Badge variant={getStatusVariant(flow.status)}>
-                  {FormatStatus(flow.status)}
-                </Badge>
+                <MirrorStatusBadge
+                  status={flow.status}
+                  deleting={deleting.includes(flow.name)}
+                />
               </TableCell>
               <TableCell>
                 <PeerButton
@@ -111,12 +155,17 @@ export function CDCFlows({ cdcFlows }: { cdcFlows: ListMirrorsItem[] }) {
                 </Link>
               </TableCell>
               <TableCell>
-                <DropDialog
-                  mode='MIRROR'
-                  dropArgs={{
-                    flowJobName: flow.name,
-                  }}
-                />
+                {deleting.includes(flow.name) ||
+                isDeletingStatus(flow.status) ? null : (
+                  <DropDialog
+                    mode='MIRROR'
+                    dropArgs={{
+                      flowJobName: flow.name,
+                    }}
+                    onDeleting={onDeleting}
+                    onDeleteFailed={onDeleteFailed}
+                  />
+                )}
               </TableCell>
             </TableRow>
           ))}
@@ -130,9 +179,15 @@ export function CDCFlows({ cdcFlows }: { cdcFlows: ListMirrorsItem[] }) {
 export function QRepFlows({
   qrepFlows,
   title,
+  deleting,
+  onDeleting,
+  onDeleteFailed,
 }: {
   qrepFlows: ListMirrorsItem[];
   title: string;
+  deleting: string[];
+  onDeleting: (flowJobName: string) => void;
+  onDeleteFailed: (flowJobName: string) => void;
 }) {
   const styledTheme = useStyledTheme();
   if (qrepFlows?.length === 0) {
@@ -184,9 +239,10 @@ export function QRepFlows({
                 <MirrorLink flowName={flow.name} />
               </TableCell>
               <TableCell>
-                <Badge variant={getStatusVariant(flow.status)}>
-                  {FormatStatus(flow.status)}
-                </Badge>
+                <MirrorStatusBadge
+                  status={flow.status}
+                  deleting={deleting.includes(flow.name)}
+                />
               </TableCell>
               <TableCell>
                 <PeerButton
@@ -204,12 +260,17 @@ export function QRepFlows({
                 <TimeLabel timeVal={new Date(flow.createdAt)} />
               </TableCell>
               <TableCell>
-                <DropDialog
-                  mode='MIRROR'
-                  dropArgs={{
-                    flowJobName: flow.name,
-                  }}
-                />
+                {deleting.includes(flow.name) ||
+                isDeletingStatus(flow.status) ? null : (
+                  <DropDialog
+                    mode='MIRROR'
+                    dropArgs={{
+                      flowJobName: flow.name,
+                    }}
+                    onDeleting={onDeleting}
+                    onDeleteFailed={onDeleteFailed}
+                  />
+                )}
               </TableCell>
             </TableRow>
           ))}
