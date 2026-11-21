@@ -312,7 +312,7 @@ func pullCore[Items model.Items](
 	}
 
 	c.logger.Info("PullRecords: performed checks for slot and publication")
-	c.warnDroppedSourceTables(ctx, catalogPool, req.FlowJobName, req.SrcTableIDNameMapping)
+	c.WarnDroppedSourceTables(ctx, catalogPool, req.FlowJobName, req.SrcTableIDNameMapping)
 
 	// cached, since this connector is reused
 	pgVersion, err := c.MajorVersion(ctx)
@@ -1173,10 +1173,10 @@ func (c *PostgresConnector) RemoveTablesFromPublication(ctx context.Context, req
 	return nil
 }
 
-// warnDroppedSourceTables tells the user about mapped tables that no longer exist on the source:
+// WarnDroppedSourceTables tells the user about mapped tables that no longer exist on the source:
 // the destination copy is kept, so it stays behind until the table is removed from the mirror.
 // Best effort: a failure here must not stop replication. Repeats are throttled to one per table per 6 hours.
-func (c *PostgresConnector) warnDroppedSourceTables(
+func (c *PostgresConnector) WarnDroppedSourceTables(
 	ctx context.Context, catalogPool shared.CatalogPool, flowName string, relIDs map[uint32]string,
 ) {
 	if len(relIDs) == 0 {

@@ -1696,8 +1696,35 @@ func (a *FlowableActivity) recordSlotInformation(
 	}, slotMetricGauges); err != nil {
 		logger.Error("Failed to handle slot info", slog.Any("error", err))
 	}
+	a.warnDroppedTables(ctx, info.config, srcConn)
 
 	return nil
+}
+
+// warnDroppedTables covers paused or failing mirrors: their puller is not running,
+// so nobody else would notice that a mapped source table was dropped.
+func (a *FlowableActivity) warnDroppedTables(
+	ctx context.Context, config *protos.FlowConnectionConfigsCore, srcConn *connpostgres.PostgresConnector,
+) {
+	if len(config.TableMappings) == 0 {
+		return
+	}
+	destNames := make([]string, 0, len(config.TableMappings))
+	for _, tm := range config.TableMappings {
+		destNames = append(destNames, tm.DestinationTableIdentifier)
+	}
+	schemas, err := internal.LoadTableSchemasFromCatalog(ctx, a.CatalogPool, config.FlowJobName, destNames)
+	if err != nil {
+		internal.LoggerFromCtx(ctx).Warn("failed to load table schemas to check for dropped tables", slog.Any("error", err))
+		return
+	}
+	relIDs := make(map[uint32]string, len(schemas))
+	for _, tm := range config.TableMappings {
+		if schema, ok := schemas[tm.DestinationTableIdentifier]; ok && schema.TableOid != 0 {
+			relIDs[schema.TableOid] = tm.SourceTableIdentifier
+		}
+	}
+	srcConn.WarnDroppedSourceTables(ctx, a.CatalogPool, config.FlowJobName, relIDs)
 }
 
 func (a *FlowableActivity) emitLogRetentionHours(
