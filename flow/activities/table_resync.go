@@ -48,7 +48,7 @@ func (a *FlowableActivity) requestTableResyncs(
 		}) {
 			update.AdditionalTables = append(update.AdditionalTables, tableMappings[idx])
 			a.Alerter.LogFlowInfo(ctx, config.FlowJobName,
-				fmt.Sprintf("resyncing table %s: %s", delta.SrcTableName, delta.ResyncReason))
+				fmt.Sprintf("table resync started for %s: %s", delta.SrcTableName, delta.ResyncReason))
 		}
 	}
 	if len(update.AdditionalTables) == 0 {

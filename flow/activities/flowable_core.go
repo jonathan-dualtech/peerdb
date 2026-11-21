@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -122,7 +123,39 @@ func (a *FlowableActivity) applySchemaDeltas(
 	); err != nil {
 		return fmt.Errorf("failed to update table schemas in catalog: %w", err)
 	}
+	for _, delta := range schemaDeltas {
+		if delta.ResyncRequired {
+			continue // table_resync.go reports these
+		}
+		if !replaysDestructive {
+			delta = model.WithoutDestructiveChanges(delta)
+		}
+		if msg := describeSchemaDelta(delta); msg != "" {
+			a.Alerter.LogFlowInfo(ctx, config.FlowJobName, msg)
+		}
+	}
 	return nil
+}
+
+// describeSchemaDelta summarizes the changes replayed on the destination, or "" when there are none.
+func describeSchemaDelta(delta *protos.TableSchemaDelta) string {
+	var parts []string
+	for _, c := range delta.AddedColumns {
+		parts = append(parts, fmt.Sprintf("added %s %s", c.Name, c.Type))
+	}
+	for _, c := range delta.DroppedColumns {
+		parts = append(parts, "dropped "+c)
+	}
+	for _, r := range delta.RenamedColumns {
+		parts = append(parts, fmt.Sprintf("renamed %s to %s", r.OldName, r.NewName))
+	}
+	for _, c := range delta.ChangedColumns {
+		parts = append(parts, fmt.Sprintf("changed %s to %s", c.Name, c.Type))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("schema change on %s: %s", delta.SrcTableName, strings.Join(parts, ", "))
 }
 
 func pullAndSyncCore[TPull connectors.CDCPullConnectorCore, TSync connectors.CDCSyncConnectorCore, Items model.Items](
