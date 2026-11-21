@@ -1978,6 +1978,7 @@ func processTruncateMessage[Items model.Items](
 			continue
 		}
 		logger.Info("Detected TRUNCATE", slog.String("table", srcTableName), slog.String("destination", dstInfo.Name))
+		p.alerter.LogFlowInfo(ctx, p.flowJobName, "schema change: TRUNCATE of "+srcTableName+" replicated")
 		if err := batch.AddRecord(ctx, &model.TruncateRecord[Items]{
 			BaseRecord:           p.baseRecord(lsn),
 			SourceTableName:      srcTableName,

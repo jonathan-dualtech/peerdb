@@ -312,6 +312,7 @@ func pullCore[Items model.Items](
 	}
 
 	c.logger.Info("PullRecords: performed checks for slot and publication")
+	c.warnDroppedSourceTables(ctx, catalogPool, req.FlowJobName, req.SrcTableIDNameMapping)
 
 	// cached, since this connector is reused
 	pgVersion, err := c.MajorVersion(ctx)
@@ -1170,4 +1171,44 @@ func (c *PostgresConnector) RemoveTablesFromPublication(ctx context.Context, req
 	}
 
 	return nil
+}
+
+// warnDroppedSourceTables tells the user about mapped tables that no longer exist on the source:
+// the destination copy is kept, so it stays behind until the table is removed from the mirror.
+// Best effort: a failure here must not stop replication. Repeats are throttled to one per table per 6 hours.
+func (c *PostgresConnector) warnDroppedSourceTables(
+	ctx context.Context, catalogPool shared.CatalogPool, flowName string, relIDs map[uint32]string,
+) {
+	if len(relIDs) == 0 {
+		return
+	}
+	ids := make([]uint32, 0, len(relIDs))
+	for id := range relIDs {
+		ids = append(ids, id)
+	}
+	rows, err := c.conn.Query(ctx, "SELECT oid FROM pg_class WHERE oid = ANY($1)", ids)
+	if err != nil {
+		c.logger.Warn("failed to check for dropped source tables", slog.Any("error", err))
+		return
+	}
+	existing, err := pgx.CollectRows(rows, pgx.RowTo[uint32])
+	if err != nil {
+		c.logger.Warn("failed to check for dropped source tables", slog.Any("error", err))
+		return
+	}
+	for id, name := range relIDs {
+		if slices.Contains(existing, id) {
+			continue
+		}
+		msg := fmt.Sprintf("source table %s was dropped; its destination table is kept, remove the table from the mirror to clean it up", name)
+		var recent bool
+		if err := catalogPool.QueryRow(ctx,
+			"SELECT EXISTS(SELECT 1 FROM peerdb_stats.flow_errors WHERE flow_name=$1 AND error_message=$2"+
+				" AND error_timestamp > now() - interval '6 hours')", flowName, msg).Scan(&recent); err != nil || recent {
+			continue
+		}
+		if err := alerting.InsertFlowLog(ctx, catalogPool, flowName, msg, alerting.FlowErrorTypeWarn); err != nil {
+			c.logger.Warn("failed to insert dropped table warning", slog.Any("error", err))
+		}
+	}
 }
